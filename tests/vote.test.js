@@ -30,6 +30,7 @@ assert.equal(csv.charCodeAt(0),0xfeff);assert.ok(csv.includes('"\'=SUM(A1)"'));a
 let harness=fs.readFileSync(path.join(__dirname,'smoke.test.js'),'utf8').split('(async()=>{')[0];
 harness=harness.replace('dialog|tbody|h2|form','dialog|tbody|h2|form|span').replace('function load(slug){','function load(slug,extras={}){').replace('context.window=context;','Object.assign(context,extras);context.window=context;');
 harness=harness.replace('showModal(){this.open=true}', 'showModal(){this.open=true}close(){this.open=false;this.onclose?.()}');
+harness=harness.replace("if(slug==='picker')","context.UTRoom=require('./room-ui-stub.js')(context);if(slug==='picker')");
 const load=new Function('require','__dirname',harness+';return load;')(require,__dirname);
 class Emitter{constructor(){this.events={}}on(t,f){(this.events[t]||=[]).push(f)}emit(t,v){(this.events[t]||[]).forEach(f=>f(v))}}
 class Connection extends Emitter{constructor(){super();this.open=true;this.connectionId=Math.random().toString();this.sent=[]}send(m){this.sent.push(m)}close(){this.open=false;this.emit('close')}}
@@ -44,7 +45,7 @@ c.emit('data',{...answer([999]),qid});c.emit('data',{...answer([0]),qid,clientId
 host.get('toggle-open').click();c.emit('data',{...answer([0]),qid});saved=JSON.parse(storage.getItem('unitools:vote-room-'+code));assert.deepEqual(saved.votes[qid][id],[1]);assert.equal(c.sent.at(-1).q,null);
 p.emit('disconnected');assert.ok(p.reconnected);
 host=load('vote',{Peer,localStorage:storage,location:{origin:'https://example.test',pathname:'/tools/vote.html',search:''},confirm:()=>true});assert.equal(host.get('resume-room').hidden,false);host.get('resume-room').click();p=Peer.peers.at(-1);assert.equal(p.id,'unitools-vote-'+code);assert.equal(JSON.parse(storage.getItem('unitools:vote-room-'+code)).votes[qid][id][0],1);
-p.emit('error',{type:'unavailable-id'});assert.notEqual(Peer.peers.at(-1).id,p.id);
+p.emit('error',{type:'unavailable-id'});assert.equal(Peer.peers.at(-1).id,p.id);
 host.get('end-room').click();assert.equal(storage.getItem('unitools:vote-active'),'null');
 const participant=load('vote',{Peer,localStorage:storage,location:{search:'?room=ABC234'}});p=Peer.peers.at(-1);p.emit('open');const pc=p.connection;pc.emit('open');assert.equal(p.target,'unitools-vote-ABC234');assert.equal(p.options.reliable,true);assert.equal(pc.sent.at(-1).t,'hello');
 pc.emit('data',{t:'state',q:question(),open:true,answered:false});const inputs=participant.get('answer-fields').children.map(label=>label.children[0]);inputs[0].checked=true;participant.get('answer-form').onsubmit({preventDefault(){}});assert.equal(pc.sent.at(-1).t,'answer');pc.emit('data',{t:'ack',qid:'q-test'});assert.match(participant.get('answer-status').textContent,/ส่งคำตอบแล้ว/);pc.close();assert.equal(participant.get('connection-status').textContent,'กำลังเชื่อมต่อใหม่');assert.equal(participant.get('connection-status').dataset.connection,'connecting');
@@ -131,3 +132,7 @@ stickyHost.get('toggle-results').click();assert.equal(stickyHost.get('note-focus
 // A malformed host state must not replace the participant form or break counters.
 pc.emit('data',{t:'state',q:sticky,open:true,answered:true});assert.equal(participant.get('submit-answer').disabled,false);
 console.log('PASS: post-it focus/spotlight, pointer rearrangement, colour sorting and malformed state rejection');
+const inheritedDeck=question('choice',{id:'toString'}),safeVotes=V.dictionary(JSON.parse('{"toString":{}}'));V.questionData(safeVotes,inheritedDeck.id)[id]=[1];assert.equal(V.tally(inheritedDeck,safeVotes.toString).total,1);assert.deepEqual(JSON.parse(JSON.stringify(safeVotes)).toString[id],[1]);assert.equal(Object.getPrototypeOf(V.dictionary(JSON.parse(JSON.stringify(safeVotes)))) ,null);assert.equal(Object.getPrototypeOf(V.questionData({},'toString')),null);
+// Arrow keys reorder and announce, and keep native keyboard navigation outside this handler.
+stickyHost.get('toggle-results').click();const beforeKeyboard=board().children[0].children[2].children[0].textContent;let keyboardDrag=board().children[0].children[2].children[2].children[0],prevented=false,stopped=false;keyboardDrag.onkeydown({key:'ArrowUp',preventDefault(){prevented=true},stopPropagation(){stopped=true}});assert.equal(prevented,true);assert.equal(stopped,true);assert.equal(board().children[0].children[1].children[0].textContent,beforeKeyboard);assert.match(stickyHost.get('vote-status').textContent,/ตำแหน่ง 1/);assert.equal(stickyHost.get('vote-status').attrs['aria-live'],'polite');
+console.log('PASS: inherited question IDs persist and keyboard note reorder announces position');

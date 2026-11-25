@@ -1,6 +1,33 @@
 /* UniTools certificate studio — Thai text is shaped by the browser canvas. */
 (() => {
   'use strict';
+  function fitText(ctx, box, text, width, height, scale) {
+    const x = box.x * width, y = box.y * height, margin = 24 * scale;
+    const available = Math.max(0, box.align === 'center' ? 2 * Math.min(x - margin, width - margin - x) : box.align === 'right' ? x - margin : width - margin - x);
+    let size = box.size, lines = text.split('\n');
+    const measure = line => ctx.measureText(line).width;
+    const font = () => { ctx.font = `${size * scale}px "${box.font}"`; };
+    font();
+    const minimum = Math.min(size, 6);
+    while (size > minimum && lines.some(line => measure(line) > available)) { size = Math.max(minimum, size - 1); font(); }
+    if (lines.some(line => measure(line) > available)) {
+      const wrapped = [], segmenter = new Intl.Segmenter('th', { granularity: 'grapheme' });
+      for (const line of lines) {
+        let part = '';
+        for (const { segment } of segmenter.segment(line)) {
+          if (part && measure(part + segment) > available) { wrapped.push(part); part = ''; }
+          part += segment;
+        }
+        wrapped.push(part);
+      }
+      lines = wrapped;
+    }
+    const px = size * scale, lineHeight = px * 1.55;
+    const overflow = lines.length > 2 || lines.some(line => measure(line) > available) || y - px * .8 < margin || y + (lines.length - 1) * lineHeight + px * .8 > height - margin;
+    return { px, lines, lineHeight, overflow, width: Math.max(12, ...lines.map(measure)) };
+  }
+  if (typeof module === 'object' && module.exports) module.exports = { fitText };
+  if (typeof document === 'undefined') return;
   const $ = id => document.getElementById(id), canvas = $('cert-canvas'), ctx = canvas.getContext('2d');
   const status = (text, error = false) => { $('cert-status').textContent = text; $('cert-status').dataset.error = String(error); };
   if (!window.UT) { status('ไม่พบส่วนช่วยของเว็บไซต์ กรุณาโหลดหน้าใหม่เมื่อเว็บไซต์พร้อม', true); document.querySelectorAll('button').forEach(b => b.disabled = true); return; }
@@ -21,7 +48,7 @@
   let boxes = validBoxes(stored) ? stored : defaults(), rows = [], columns = ['ชื่อ'], current = 0, nameColumn = 'ชื่อ', background = null, workbook = null, active = 2, busy = false, previewVersion = 0, hits = [], drag = null;
   const need = key => { if (!window[key]) throw new Error('โหลดไลบรารีไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตและโหลดหน้าใหม่'); return window[key]; };
   const pause = () => new Promise(r => setTimeout(r, 0));
-  function persist() { U.store.set(KEY, boxes); }
+  function persist() { return U.store.set(KEY, boxes); }
   function replace(template, row) { return template.replace(/\{([^{}]+)\}/g, (_, key) => String((key === 'ชื่อ' ? row[nameColumn] : row[key]) ?? '')); }
   async function readyFonts() {
     const families = [...new Set(['Sarabun', ...boxes.map(b => b.font)])];
@@ -37,20 +64,22 @@
     ctx.beginPath(); ctx.moveTo(w * .40, h * .79); ctx.lineTo(w * .60, h * .79); ctx.stroke();
   }
   function draw(row) {
-    base(); hits = []; const scale = canvas.width / (canvas.width > canvas.height ? 841.89 : 595.28);
+    base(); hits = []; let overflowing = false; const scale = canvas.width / (canvas.width > canvas.height ? 841.89 : 595.28);
     boxes.forEach((box, i) => {
-      const px = box.size * scale, x = box.x * canvas.width, y = box.y * canvas.height, lines = replace(box.text, row).split('\n');
-      ctx.font = `${px}px "${box.font}"`; ctx.fillStyle = box.color; ctx.textAlign = box.align; ctx.textBaseline = 'middle';
-      const widths = lines.map(line => ctx.measureText(line).width), width = Math.max(12, ...widths), lineHeight = px * 1.55;
-      lines.forEach((line, k) => ctx.fillText(line, x, y + k * lineHeight));
+      const x = box.x * canvas.width, y = box.y * canvas.height;
+      const { px, lines, lineHeight, width, overflow } = fitText(ctx, box, replace(box.text, row), canvas.width, canvas.height, scale);
+      if (overflow) overflowing = true;
+      ctx.fillStyle = box.color; ctx.textAlign = box.align; ctx.textBaseline = 'middle';
+      lines.slice(0, 2).forEach((line, k) => ctx.fillText(line, x, y + k * lineHeight));
       hits.push({ i, x: x - (box.align === 'center' ? width / 2 : box.align === 'right' ? width : 0) - 8, y: y - px * .8, w: width + 16, h: lineHeight * (lines.length - 1) + px * 1.6 });
     });
+    return overflowing;
   }
   function highlight() { const hit = hits.find(h => h.i === active); if (!hit) return; ctx.save(); ctx.strokeStyle = '#14795e'; ctx.lineWidth = 2; ctx.setLineDash([10, 7]); ctx.strokeRect(hit.x, hit.y, hit.w, hit.h); ctx.restore(); }
   function sampleRow() { return rows[current] || { [nameColumn]: 'สมชาย ใจดี' }; }
   async function preview() {
     const version = ++previewVersion;
-    try { await readyFonts(); if (version !== previewVersion || busy) return; draw(sampleRow()); highlight(); $('row-indicator').textContent = rows.length ? `${current + 1} / ${rows.length}` : 'ตัวอย่าง'; $('prev-row').disabled = current === 0; $('next-row').disabled = !rows.length || current >= rows.length - 1; status(rows.length ? 'พร้อมส่งออก ' + rows.length + ' ใบ' : 'เพิ่มรายชื่อเพื่อสร้างเกียรติบัตร'); }
+    try { await readyFonts(); if (version !== previewVersion || busy) return; const overflow = draw(sampleRow()); highlight(); $('row-indicator').textContent = rows.length ? `${current + 1} / ${rows.length}` : 'ตัวอย่าง'; $('prev-row').disabled = current === 0; $('next-row').disabled = !rows.length || current >= rows.length - 1; status(overflow ? 'ข้อความล้นกรอบ กรุณาลดข้อความหรือปรับตำแหน่งก่อนส่งออก' : rows.length ? 'พร้อมส่งออก ' + rows.length + ' ใบ' : 'เพิ่มรายชื่อเพื่อสร้างเกียรติบัตร'); }
     catch (e) { if (version === previewVersion) { base(); status(e.message, true); } }
   }
   function editor() {
@@ -117,7 +146,7 @@
   $('prev-row').onclick = () => { if (busy) return; current = Math.max(0, current - 1); preview(); };
   $('next-row').onclick = () => { if (busy) return; current = Math.min(rows.length - 1, current + 1); preview(); };
   $('add-box').onclick = () => { if (busy) return; if (boxes.length >= 50) { status('เพิ่มข้อความได้สูงสุด 50 กล่อง', true); return; } boxes.push({ text: 'ข้อความใหม่', font: 'Sarabun', size: 20, color: '#253d49', align: 'center', x: .5, y: .75 }); active = boxes.length - 1; persist(); editor(); preview(); };
-  $('save-layout').onclick = () => { persist(); U.toast('บันทึกแบบแล้ว'); status('บันทึกข้อความ ตำแหน่ง และฟอนต์แล้ว'); };
+  $('save-layout').onclick = () => { if (persist()) { U.toast('บันทึกแบบแล้ว'); status('บันทึกข้อความ ตำแหน่ง และฟอนต์แล้ว'); } else status('แบบอยู่ในหน้านี้เท่านั้น บันทึกในเบราว์เซอร์ไม่ได้', true); };
   $('reset-layout').onclick = () => { if (busy) return; boxes = defaults(); active = 2; persist(); editor(); preview(); };
   const point = event => { const r = canvas.getBoundingClientRect(); return { x: (event.clientX - r.left) / r.width * canvas.width, y: (event.clientY - r.top) / r.height * canvas.height }; };
   canvas.addEventListener('pointerdown', event => {
@@ -135,7 +164,10 @@
   async function exportAll(zipMode) {
     if (!rows.length) { status('กรุณาเพิ่มรายชื่อก่อนส่งออก', true); return; }
     await action(async () => {
-      need('jspdf'); if (zipMode) need('JSZip'); await readyFonts(); const zip = zipMode ? new JSZip() : null, pdf = zipMode ? null : makePDF(); $('cert-progress').hidden = false;
+      await readyFonts(); const overflowRows = [];
+      for (let i = 0; i < rows.length; i++) { if (draw(rows[i])) overflowRows.push(i + 1); if (i % 20 === 0) await pause(); }
+      if (overflowRows.length) throw new Error('ข้อความล้นกรอบในแถวที่ ' + overflowRows.join(', ') + ' กรุณาลดข้อความหรือปรับตำแหน่งก่อนส่งออก');
+      need('jspdf'); if (zipMode) need('JSZip'); const zip = zipMode ? new JSZip() : null, pdf = zipMode ? null : makePDF(); $('cert-progress').hidden = false;
       for (let i = 0; i < rows.length; i++) {
         status(`กำลังสร้าง ${i + 1} / ${rows.length} ใบ…`); draw(rows[i]); const target = zipMode ? makePDF() : pdf; if (!zipMode && i > 0) target.addPage(); addCanvas(target);
         if (zipMode) { const name = String(rows[i][nameColumn] || 'certificate').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 100) || 'certificate'; zip.file(`${String(i + 1).padStart(3, '0')}-${name}.pdf`, target.output('arraybuffer')); }
