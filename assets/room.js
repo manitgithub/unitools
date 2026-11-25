@@ -1,0 +1,24 @@
+(function(root){'use strict';
+const ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function roomCode(random=n=>{const a=new Uint32Array(1),limit=Math.floor(4294967296/n)*n;do{root.crypto.getRandomValues(a)}while(a[0]>=limit);return a[0]%n}){return Array.from({length:6},()=>ALPHABET[random(ALPHABET.length)]).join('')}
+const validRoom=s=>typeof s==='string'&&s.length===6&&[...s].every(c=>ALPHABET.includes(c));
+function sendTo(c,m){try{if(c?.open){c.send(m);return true}}catch{}return false}
+function broadcast(connections,message){connections.forEach(c=>sendTo(c,typeof message==='function'?message(c):message))}
+function statusPill(element,s){if(!element)return;element.textContent=s;element.dataset.connection=s==='เชื่อมต่อแล้ว'?'connected':s.includes('กำลัง')?'connecting':'disconnected'}
+function joinURL(code){return root.location.origin+root.location.pathname+'?room='+encodeURIComponent(code)}
+function renderQR(box,code){box.replaceChildren();try{const qr=root.qrcode(0,'M');qr.addData(joinURL(code));qr.make();const n=qr.getModuleCount(),canvas=root.document.createElement('canvas');canvas.width=canvas.height=(n+8)*5;canvas.setAttribute('role','img');canvas.setAttribute('aria-label','QR เข้าร่วมห้อง '+code);const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#2d3748';for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(qr.isDark(y,x))ctx.fillRect((x+4)*5,(y+4)*5,5,5);box.append(canvas)}catch{const p=root.document.createElement('p');p.textContent='โหลด QR ไม่ได้ ใช้รหัสหรือลิงก์ด้านบนเพื่อเข้าร่วม';box.append(p)}}
+function createHost({prefix,code=roomCode(),onMessage=()=>{},onJoin=()=>{},onLeave=()=>{},onStatus=()=>{},onCode=()=>{},onError=()=>{},reclaimAttempts=4}){
+ let peer,stopped=false,timer,attempt=0;const connections=new Map();
+ const api={get peer(){return peer},get code(){return code},connections,sendTo,broadcast:m=>broadcast(connections,m),destroy(){stopped=true;clearTimeout(timer);peer?.destroy();connections.clear()}};
+ function start(){if(stopped)return;onStatus('กำลังเชื่อมต่อ');const p=peer=new root.Peer(prefix+code);p.on('open',()=>{if(p!==peer||stopped)return;attempt=0;onStatus('เชื่อมต่อแล้ว')});p.on('disconnected',()=>{if(p!==peer||stopped)return;onStatus('กำลังเชื่อมต่อใหม่');try{p.reconnect()}catch{timer=setTimeout(start,1500)}});p.on('error',e=>{if(p!==peer||stopped)return;if(e.type==='unavailable-id'){p.destroy();connections.clear();if(attempt++<reclaimAttempts){onStatus('กำลังเชื่อมต่อใหม่');timer=setTimeout(start,Math.min(6000,800*2**attempt))}else{attempt=0;code=roomCode();onCode(code);start()}return}onStatus('หลุด');onError(e);if(['network','server-error','socket-error','socket-closed'].includes(e.type)){p.destroy();timer=setTimeout(start,3000)}});p.on('connection',c=>{connections.set(c.connectionId,c);c.on('open',()=>{if(!stopped&&p===peer)onJoin(c)});c.on('data',m=>{if(!stopped&&p===peer&&c.open&&m&&typeof m==='object')onMessage(m,c)});let closed=false;const close=()=>{if(closed)return;closed=true;connections.delete(c.connectionId);onLeave(c)};c.on('close',close);c.on('error',close)})}
+ start();return api;
+}
+function joinRoom({prefix,code,onState=()=>{},onStatus=()=>{},onOpen=()=>{},onError=()=>{}}){
+ if(!validRoom(code))throw Error('รหัสห้องไม่ถูกต้อง');let peer,conn,stopped=false,retry=0,timer=null,timeout;
+ function schedule(){onStatus('กำลังเชื่อมต่อใหม่');if(stopped||timer)return;clearTimeout(timeout);timer=setTimeout(()=>{timer=null;connect()},Math.min(15000,700*2**Math.min(retry++,5)))}
+ function connect(){if(stopped)return;if(!peer||peer.destroyed){init();return}const old=conn;conn=null;old?.close();onStatus('กำลังเชื่อมต่อ');const c=conn=peer.connect(prefix+code,{reliable:true});timeout=setTimeout(()=>{if(c===conn&&!c.open){c.close();schedule()}},10000);c.on('open',()=>{if(c!==conn||stopped)return;clearTimeout(timeout);clearTimeout(timer);timer=null;retry=0;onStatus('เชื่อมต่อแล้ว');onOpen(c)});c.on('data',m=>{if(c===conn&&!stopped&&m&&typeof m==='object')onState(m,c)});c.on('close',()=>{if(c===conn&&!stopped)schedule()});c.on('error',()=>{if(c===conn&&!stopped)schedule()})}
+ function init(){const p=peer=new root.Peer();p.on('open',connect);p.on('disconnected',()=>{if(stopped||p!==peer)return;onStatus('กำลังเชื่อมต่อใหม่');try{p.reconnect()}catch{schedule()}});p.on('error',e=>{if(stopped||p!==peer)return;onError(e);schedule()})}
+ init();return{get peer(){return peer},get connection(){return conn},send:m=>sendTo(conn,m),destroy(){stopped=true;clearTimeout(timer);clearTimeout(timeout);conn?.close();peer?.destroy()}};
+}
+const api={ALPHABET,roomCode,validRoom,sendTo,broadcast,statusPill,joinURL,renderQR,createHost,joinRoom};if(typeof module!=='undefined')module.exports=api;root.UTRoom=api;
+})(typeof window==='undefined'?globalThis:window);
